@@ -1,0 +1,6 @@
+name: Auto Sync & Deploy                     ← workflow的名称（在Actions页面显示）
+
+on:                                          ← 触发条件（什么时候自动跑）
+  schedule:
+    - cron: '0 3 * * *'                      # 每天凌晨3点
+  workflow_dispatch:                          # 也允许手动点按钮触发
