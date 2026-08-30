@@ -2,8 +2,8 @@ name: Auto Sync & Deploy
 
 on:
   schedule:
-    - cron: '0 3 * * *'  # 每天凌晨3点检查并部署
-  workflow_dispatch:       # 也允许手动触发
+    - cron: '0 3 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,7 +16,6 @@ jobs:
       - name: Checkout current code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
 
       - name: Configure git
@@ -50,22 +49,18 @@ jobs:
           echo "✅ 同步完成"
 
       - name: Setup pnpm
-        if: steps.check.outputs.up-to-date == 'false' || always()
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
-        if: steps.check.outputs.up-to-date == 'false' || always()
         uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: 'pnpm'
 
       - name: Install dependencies
-        if: steps.check.outputs.up-to-date == 'false' || always()
         run: pnpm install --frozen-lockfile
 
       - name: Set environment variables
-        if: steps.check.outputs.up-to-date == 'false' || always()
         run: |
           echo "BUILD_TARGET=cloudflare" >> $GITHUB_ENV
           echo "NODE_ENV=production" >> $GITHUB_ENV
@@ -107,7 +102,6 @@ jobs:
           echo "WATCH_ROOM_SERVER_TYPE=${{ secrets.WATCH_ROOM_SERVER_TYPE }}" >> $GITHUB_ENV
 
       - name: Configure D1 Database in wrangler.toml
-        if: steps.check.outputs.up-to-date == 'false' || always()
         run: |
           STORAGE_TYPE="${{ secrets.NEXT_PUBLIC_STORAGE_TYPE }}"
           if [ "$STORAGE_TYPE" != "d1" ]; then
@@ -124,7 +118,6 @@ jobs:
           fi
 
       - name: Update wrangler.toml with environment variables
-        if: steps.check.outputs.up-to-date == 'false' || always()
         run: |
           append_var() {
             local var_name=$1
@@ -173,15 +166,12 @@ jobs:
           cat wrangler.toml
 
       - name: Build for Cloudflare
-        if: steps.check.outputs.up-to-date == 'false' || always()
         run: pnpm run build:cloudflare
 
       - name: Install Wrangler
-        if: steps.check.outputs.up-to-date == 'false' || always()
         run: pnpm add -g wrangler@4.60.0
 
       - name: Run D1 Database Migrations
-        if: steps.check.outputs.up-to-date == 'false' || always()
         run: |
           STORAGE_TYPE="${{ secrets.NEXT_PUBLIC_STORAGE_TYPE }}"
           if [ "$STORAGE_TYPE" != "d1" ]; then
@@ -205,7 +195,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Deploy to Cloudflare
-        if: steps.check.outputs.up-to-date == 'false' || always()
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
