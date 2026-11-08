@@ -1,13 +1,20 @@
 name: Auto sync upstream & deploy
 
-# 每 6 小时把上游 mtvpls:main merge 进 main（保留本地提交），
-# 有变化就自动触发上游自带的 cloudflare-deploy.yml 部署到 CF。
-# 纯 workflow，无需安装任何 GitHub App。
+# 定时 + push 双触发：
+#  - 每 6 小时（cron 5 段格式）把上游 mtvpls:main merge 进 main（保留本地提交）
+#  - 任何 push 到 main 后自动触发 CF 部署
+# 纯 git 原生实现，零第三方依赖。
 
 on:
   schedule:
-    - cron: '*/6 * * * *'        # 每 6 小时（0,6,12,18 点）
+    - cron: '0 */6 * * *'        # 5 段 cron：每 6 小时（UTC 0/6/12/18 点 = 北京 8/14/20/2 点）
   workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
 
 concurrency:
   group: auto-sync-deploy
@@ -15,6 +22,7 @@ concurrency:
 
 jobs:
   sync:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.sync.outputs.changed }}
@@ -30,37 +38,40 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-      - name: Merge upstream
+      - name: Sync upstream (merge, never reset)
         id: sync
         run: |
           set -euo pipefail
           git remote add upstream https://github.com/mtvpls/MoonTVPlus.git 2>/dev/null || true
           git fetch --no-tags upstream main
 
-          # 已包含上游最新 → 跳过
+          # 若本仓库 main 已包含上游最新 → 无需同步
           if git merge-base --is-ancestor upstream/main HEAD; then
             echo "已是最新，跳过"
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "上游更新："
+          echo "=== 上游新提交 ==="
           git log --oneline HEAD..upstream/main | head -20
 
-          # merge（不是 reset），保留本仓库自己的提交
+          # merge（绝不用 reset/force），保留本仓库自己的提交
           if git merge --no-edit upstream/main; then
             git push origin HEAD:main
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::上游 merge 冲突，已中止，你的改动未被覆盖"
+            echo "::error::上游合并冲突，已中止。你的改动没有被覆盖，请手动处理。"
             git merge --abort
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
   deploy:
+    # 触发条件：
+    #  1) push 到 main（任意来源，包括 CI 自己的 merge push）
+    #  2) 定时同步产生了新 commit
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || needs.sync.outputs.changed == 'true'
     needs: sync
-    if: needs.sync.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Cloudflare deploy
