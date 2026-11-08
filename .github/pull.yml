@@ -1,0 +1,8 @@
+version: "1"
+rules:
+  # base: 目标分支（你的 main）
+  # upstream: 必须是同一 fork 网络内的上游 —— 你的 fork parent 是 mtvpls:main
+  # mergeMethod: merge —— 关键！保留你仓库自己的提交，绝不 hardreset 覆盖
+  - base: main
+    upstream: mtvpls:main
+    mergeMethod: merge
