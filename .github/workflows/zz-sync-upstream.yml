@@ -1,0 +1,101 @@
+name: Sync upstream & deploy
+
+# ─────────────────────────────────────────────────────────────
+# 自定义工作流。上游 mtvpls/MoonTVPlus 没有这个文件名，
+# 所以无论怎样同步上游，这个文件都不会被覆盖或冲突。
+#
+# 作用：
+#   1. 定时把上游的新提交 merge 进本仓库 main（用 merge，绝不用 reset）
+#   2. 有变化才推送到 main
+#   3. 推送后调用上游自带的 cloudflare-deploy.yml 完成 CF 部署
+#      （不复制部署逻辑，上游以后改部署我们自动跟上）
+#
+# 你的自定义只放在"上游不存在的文件"里，就永远不会被 sync 冲掉。
+# ─────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # 每天 20:00 UTC = 北京时间 04:00
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+    inputs:
+      deploy_only:
+        description: '只重新部署，不同步上游'
+        type: boolean
+        default: false
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Sync upstream (merge, never reset)
+        id: merge
+        run: |
+          set -euo pipefail
+
+          if [ "${{ inputs.deploy_only }}" = "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "跳过同步（deploy_only）"
+            exit 0
+          fi
+
+          git remote add upstream https://github.com/mtvpls/MoonTVPlus.git 2>/dev/null || true
+          git fetch --no-tags upstream main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "已是最新，无需同步"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "上游新提交："
+          git log --oneline HEAD..upstream/main | head -20
+
+          # 关键：merge 而不是 reset —— 保留本仓库自己的提交
+          if git merge --no-edit upstream/main; then
+            echo "merge 成功"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::上游合并冲突，已中止。你的改动没有被覆盖。请手动处理后重试。"
+            git merge --abort
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Push merged result
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin HEAD:main
+
+  deploy:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Cloudflare deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run cloudflare-deploy.yml --ref main
+          sleep 8
+          gh run list --workflow=cloudflare-deploy.yml --limit 3
