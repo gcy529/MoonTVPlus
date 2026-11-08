@@ -1,22 +1,12 @@
 name: Auto sync upstream & deploy
 
 # 每 6 小时自动把上游 mtvpls:main merge 进 main，有变化就自动部署到 CF。
-# 用 aormsby/Fork-Sync-With-Upstream-action，纯 workflow，无需安装任何 GitHub App。
-# 同步方式是 merge（保留你的提交），不是 hard reset。
+# 纯 GitHub Actions，无需安装任何 App。
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # 每 6 小时（UTC 0/6/12/18 点 = 北京 8/14/20/2 点）
+    - cron: '0 */6 * * *'
   workflow_dispatch:
-    inputs:
-      force_sync:
-        description: '强制同步（即使已是最新也跑一次）'
-        type: boolean
-        default: false
-
-concurrency:
-  group: auto-sync-deploy
-  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -26,32 +16,30 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     outputs:
-      pushed: ${{ steps.push.outputs.pushed }}
+      has_new: ${{ steps.sync.outputs.has_new_commits }}
     steps:
-      - name: Sync fork with upstream (merge, keep local commits)
+      - name: Sync fork with upstream
+        id: sync
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.3
         with:
-          syncBranch: main
-          upstreamRepository: mtvpls/MoonTVPlus
-          forceUpdate: ${{ inputs.force_sync || 'false' }}
-          # 注意：默认就是 merge，不会 hard reset 覆盖你的提交
+          target_sync_branch: main
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          upstream_sync_repo: mtvpls/MoonTVPlus
+          upstream_sync_branch: main
+          git_config_pull_rebase: 'false'
 
-      - name: Push sync result to main
-        id: push
+      - name: Push result
+        if: steps.sync.outputs.has_new_commits == 'true'
         run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git remote add origin https://github.com/${{ github.repository }}.git 2>/dev/null || true
           git push origin main
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          echo "推送完成"
 
   deploy:
     needs: sync
-    if: needs.sync.outputs.pushed == 'true'
+    if: needs.sync.outputs.has_new == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Cloudflare deploy
+      - name: Trigger CF deploy
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
